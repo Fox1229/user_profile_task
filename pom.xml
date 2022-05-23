@@ -12,6 +12,8 @@
         <module>task_common</module>
         <module>task_sql</module>
         <module>task_merge</module>
+        <module>task_export_ck</module>
+        <module>task_bitmap</module>
     </modules>
 
     <properties>

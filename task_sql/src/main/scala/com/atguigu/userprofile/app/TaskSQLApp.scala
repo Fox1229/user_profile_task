@@ -7,6 +7,7 @@ import com.atguigu.userprofile.util.MyPropertiesUtil
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
 import java.util.Properties
+import com.atguigu.userprofile.constant.ConstConfig._
 
 object TaskSQLApp {
 
@@ -34,11 +35,11 @@ object TaskSQLApp {
         // 读取配置信息
         val properties: Properties = MyPropertiesUtil.load("config.properties")
         // 数仓库
-        val dwDbName: String = properties.getProperty("data-warehouse.dbname")
+        val dwDbName: String = properties.getProperty(DATA_WAREHOUSE_DBNAME)
         // 用户画像库
-        val userProfileDbName: String = properties.getProperty("user-profile.dbname")
+        val userProfileDbName: String = properties.getProperty(USER_PROFILE_DBNAME)
         // 表存储位置
-        val userProfileLocation: String = properties.getProperty("hdfs-store.path")
+        val userProfileLocation: String = properties.getProperty(HDFS_STORE_PATH)
         // 表名
         val tableName: String = tagInfo.tagCode.toLowerCase
         // 标签等级
@@ -49,6 +50,8 @@ object TaskSQLApp {
             case ConstCode.TAG_VALUE_TYPE_DATE => "STRING"
         }
 
+        // 删除表SQL
+        val dropTableSql: String = s"drop table if exists $userProfileDbName.$tableName"
         // 创建画像表
         val createTableSql: String =
             s"""
@@ -57,21 +60,44 @@ object TaskSQLApp {
                |     uid String,
                |     query_value $tagValueType
                |)
-               |partitioned by (dt String)
+               |partitioned by(dt String)
                |ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
                |location '$userProfileLocation/$userProfileDbName/$tableName'
                |""".stripMargin
+        sparkSession.sql(dropTableSql)
         sparkSession.sql(createTableSql)
 
-        // 查询的SQL
-        val taskSql: String = taskInfo.taskSql
-        val caseWhenList: List[String] = taskTagRuleList.map(
-            taskTagRule => s"when '${taskTagRule.queryValue}' then '${taskTagRule.subTagValue}'"
-        )
-        val caseWhen: String = caseWhenList.mkString(" ")
-        val caseWhenSql: String = s"case query_value $caseWhen end as tag_value"
-        // 从数仓查询数据
-        val selectSql: String = s"select uid, $caseWhenSql from ($taskSql) t1"
+        val taskSql: String = taskInfo.taskSql.replaceAll("executeDate", executeDate)
+        // 从数仓查询的SQL
+        var selectSql: String = null
+        if (taskTagRuleList.nonEmpty) {
+            // 有四级标签
+            // 查询的SQL
+            if (tableName == "tag_person_base_cons") {
+                // 星座表
+                // 范围值的SQL
+                val caseWhenList: List[String] = taskTagRuleList.map(
+                    taskTagRule => s"when query_value ${taskTagRule.queryValue} then '${taskTagRule.subTagValue}'"
+                )
+                val caseWhen: String = caseWhenList.mkString(" ")
+                val caseWhenSql: String = s"case $caseWhen end as tag_value"
+                // 从数仓查询数据
+                selectSql = s"select uid, $caseWhenSql from ($taskSql) t1"
+            } else {
+                // 普通值SQL
+                val caseWhenList: List[String] = taskTagRuleList.map(
+                    taskTagRule => s"when '${taskTagRule.queryValue}' then '${taskTagRule.subTagValue}'"
+                )
+                val caseWhen: String = caseWhenList.mkString(" ")
+                val caseWhenSql: String = s"case query_value $caseWhen end as tag_value"
+                // 从数仓查询数据
+                selectSql = s"select uid, $caseWhenSql from ($taskSql) t1"
+            }
+        } else {
+            // 没有四级标签
+            selectSql = taskSql
+        }
+
         // 写入的SQL
         val insertSql: String =
             s"""
@@ -80,8 +106,8 @@ object TaskSQLApp {
                |$selectSql
                |""".stripMargin
 
-        // println(selectSql)
-        // println(insertSql)
+          // println(selectSql)
+          // println(insertSql)
 
         // 默认从数仓库查询数据
         sparkSession.sql(s"use $dwDbName")
